@@ -7,6 +7,7 @@ from functools import wraps
 from datetime import datetime, date
 from io import BytesIO
 import os, csv, shutil, zipfile
+from openpyxl import load_workbook
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "CHANGE_ME_IN_PRODUCTION")
@@ -193,6 +194,56 @@ def log_action(action,details="",branch_id=None):
 @app.context_processor
 def inject(): return dict(current_user=current_user())
 
+
+EXCEL_TREATMENT_COLUMNS = {
+    8: "Consultation",
+    9: "Composite Filling",
+    10: "GIC Filling",
+    11: "Scaling & Polishing",
+    12: "Tooth Extraction",
+    13: "Surgical Extraction",
+    14: "Root Canal Treatment",
+    15: "Crown Zirconia",
+    16: "Crown",
+    17: "Bridge",
+    18: "Denture",
+    19: "Implant",
+    20: "Braces (Orthodontic Treatment)",
+    21: "X-Ray",
+    22: "Other",
+}
+
+def excel_date(value):
+    if hasattr(value, "date"):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value.strip():
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(value.strip(), fmt).date()
+            except ValueError:
+                pass
+    return date.today()
+
+def get_or_create_branch(name):
+    name = (name or "Main Branch").strip()
+    b = Branch.query.filter(db.func.lower(Branch.name) == name.lower()).first()
+    if not b:
+        b = Branch(name=name, country="Pakistan")
+        db.session.add(b)
+        db.session.flush()
+    return b
+
+def get_or_create_treatment(name):
+    t = Treatment.query.filter(db.func.lower(Treatment.name) == name.lower()).first()
+    if not t:
+        t = Treatment(name=name, price=0)
+        db.session.add(t)
+        db.session.flush()
+    return t
+
+
 @app.route("/",methods=["GET","POST"])
 def login():
     if request.method=="POST":
@@ -321,6 +372,319 @@ def users():
             u=User(name=request.form["name"].strip(),email=email,password_hash=generate_password_hash(request.form["password"]),role=role,branch_id=bid)
             db.session.add(u); db.session.commit(); log_action("ADD_USER",f"{email}/{role}",bid)
     return render_template("users.html",users=User.query.order_by(User.id.desc()).all(),branches=branches,roles=[ROLE_SUPER,ROLE_BRANCH,ROLE_ENTRY,ROLE_VIEWER])
+
+
+@app.route("/users/<int:uid>/edit", methods=["GET","POST"])
+@super_required
+def user_edit(uid):
+    me = current_user()
+    target = db.session.get(User, uid)
+    if not target:
+        flash("User not found.", "danger")
+        return redirect(url_for("users"))
+    branches = Branch.query.filter_by(active=True).order_by(Branch.name).all()
+
+    if request.method == "POST":
+        email = request.form["email"].strip().lower()
+        duplicate = User.query.filter(User.email == email, User.id != target.id).first()
+        if duplicate:
+            flash("This email is already used by another user.", "danger")
+            return redirect(url_for("user_edit", uid=uid))
+
+        target.name = request.form["name"].strip()
+        target.email = email
+        if request.form.get("password", "").strip():
+            target.password_hash = generate_password_hash(request.form["password"].strip())
+
+        if target.id == me.id:
+            target.role = ROLE_SUPER
+            target.branch_id = None
+            target.active = True
+        else:
+            role = request.form["role"]
+            bid = int(request.form["branch_id"]) if request.form.get("branch_id") else None
+            if role != ROLE_SUPER and not bid:
+                flash("A branch is required for this role.", "danger")
+                return redirect(url_for("user_edit", uid=uid))
+            target.role = role
+            target.branch_id = None if role == ROLE_SUPER else bid
+            target.active = request.form.get("active") == "1"
+
+        db.session.commit()
+        log_action("EDIT_USER", f"{target.email} / {target.role}", target.branch_id)
+        flash("User updated successfully.", "success")
+        return redirect(url_for("users"))
+
+    return render_template("user_edit.html", target=target, branches=branches,
+                           roles=[ROLE_SUPER, ROLE_BRANCH, ROLE_ENTRY, ROLE_VIEWER],
+                           is_self=(target.id == me.id))
+
+@app.route("/profile", methods=["GET","POST"])
+@login_required
+def profile():
+    u = current_user()
+    if request.method == "POST":
+        email = request.form["email"].strip().lower()
+        duplicate = User.query.filter(User.email == email, User.id != u.id).first()
+        if duplicate:
+            flash("This email is already used by another user.", "danger")
+            return redirect(url_for("profile"))
+        u.name = request.form["name"].strip()
+        u.email = email
+        if request.form.get("password", "").strip():
+            u.password_hash = generate_password_hash(request.form["password"].strip())
+        db.session.commit()
+        log_action("EDIT_PROFILE", u.email, u.branch_id)
+        flash("Your profile has been updated.", "success")
+        return redirect(url_for("profile"))
+    return render_template("profile.html", u=u)
+
+@app.route("/free-patients")
+@login_required
+def free_patients():
+    u = current_user()
+    bids = allowed_branch_ids(u)
+    branch_id = request.args.get("branch_id", type=int)
+    q = request.args.get("q", "").strip()
+
+    query = Invoice.query.join(Patient).filter(
+        Invoice.branch_id.in_(bids),
+        db.or_(Invoice.payment_type == "Free", (Invoice.total - Invoice.discount) <= 0)
+    ) if bids else Invoice.query.filter(False)
+
+    if branch_id and branch_id in bids:
+        query = query.filter(Invoice.branch_id == branch_id)
+    if q:
+        query = query.filter(
+            db.or_(
+                Patient.name.ilike(f"%{q}%"),
+                Patient.mobile.ilike(f"%{q}%"),
+                Patient.patient_code.ilike(f"%{q}%")
+            )
+        )
+
+    rows = query.order_by(Invoice.created_at.desc()).all()
+    branches = Branch.query.filter(Branch.id.in_(bids)).order_by(Branch.name).all() if bids else []
+    return render_template("free_patients.html", rows=rows, branches=branches,
+                           selected_branch=branch_id, q=q)
+
+@app.route("/branch-reports")
+@login_required
+def branch_reports():
+    u = current_user()
+    bids = allowed_branch_ids(u)
+    branches = Branch.query.filter(Branch.id.in_(bids)).order_by(Branch.name).all() if bids else []
+
+    branch_id = request.args.get("branch_id", type=int)
+    start = request.args.get("start", "").strip()
+    end = request.args.get("end", "").strip()
+
+    target_ids = [branch_id] if branch_id and branch_id in bids else bids
+    start_dt = datetime.strptime(start, "%Y-%m-%d") if start else None
+    end_dt = datetime.strptime(end, "%Y-%m-%d") if end else None
+
+    rows = []
+    for b in Branch.query.filter(Branch.id.in_(target_ids)).order_by(Branch.name).all() if target_ids else []:
+        pq = Patient.query.filter(Patient.branch_id == b.id)
+        iq = Invoice.query.filter(Invoice.branch_id == b.id)
+        eq = Expense.query.filter(Expense.branch_id == b.id)
+
+        if start_dt:
+            pq = pq.filter(Patient.created_at >= start_dt)
+            iq = iq.filter(Invoice.created_at >= start_dt)
+            eq = eq.filter(Expense.expense_date >= start_dt.date())
+        if end_dt:
+            end_exclusive = end_dt.replace(hour=23, minute=59, second=59)
+            pq = pq.filter(Patient.created_at <= end_exclusive)
+            iq = iq.filter(Invoice.created_at <= end_exclusive)
+            eq = eq.filter(Expense.expense_date <= end_dt.date())
+
+        invs = iq.all()
+        exps = eq.all()
+        free_count = iq.filter(
+            db.or_(Invoice.payment_type == "Free", (Invoice.total - Invoice.discount) <= 0)
+        ).count()
+
+        billing = sum(i.total - i.discount for i in invs)
+        received = sum(i.received for i in invs)
+        due = sum(i.balance for i in invs)
+        expenses_total = sum(e.amount for e in exps)
+
+        rows.append({
+            "id": b.id,
+            "name": b.name,
+            "patients": pq.count(),
+            "billing": billing,
+            "received": received,
+            "due": due,
+            "expenses": expenses_total,
+            "net": received - expenses_total,
+            "free": free_count,
+        })
+
+    return render_template("branch_reports.html", rows=rows, branches=branches,
+                           selected_branch=branch_id, start=start, end=end)
+
+@app.route("/import-excel", methods=["GET","POST"])
+@super_required
+def import_excel():
+    if request.method == "POST":
+        uploaded = request.files.get("excel_file")
+        if not uploaded or not uploaded.filename:
+            flash("Please choose an Excel file.", "danger")
+            return redirect(url_for("import_excel"))
+        if not uploaded.filename.lower().endswith((".xlsx", ".xlsm")):
+            flash("Only .xlsx or .xlsm files are supported.", "danger")
+            return redirect(url_for("import_excel"))
+
+        tmp_name = f"import_{int(datetime.utcnow().timestamp())}_{secure_filename(uploaded.filename)}"
+        tmp_path = os.path.join(app.config["UPLOAD_FOLDER"], tmp_name)
+        uploaded.save(tmp_path)
+
+        added_patients = 0
+        skipped_patients = 0
+        added_expenses = 0
+        try:
+            wb = load_workbook(tmp_path, data_only=True, read_only=True)
+
+            if "Patient Database" not in wb.sheetnames:
+                raise ValueError("Patient Database sheet was not found.")
+
+            ws = wb["Patient Database"]
+            for r in range(6, ws.max_row + 1):
+                serial = ws.cell(r, 1).value
+                patient_name = ws.cell(r, 4).value
+                branch_name = ws.cell(r, 3).value
+                if not patient_name or not branch_name:
+                    continue
+
+                serial_text = str(int(serial)) if isinstance(serial, (int, float)) else str(serial or r-5).strip()
+                import_code = f"MS-XLS-{serial_text.zfill(5)}"
+                if Patient.query.filter_by(patient_code=import_code).first():
+                    skipped_patients += 1
+                    continue
+
+                b = get_or_create_branch(str(branch_name))
+                total = float(ws.cell(r, 23).value or 0)
+                received = float(ws.cell(r, 24).value or 0)
+                due_raw = ws.cell(r, 25).value
+                due = float(due_raw if due_raw not in (None, "") else max(total - received, 0))
+                payment = str(ws.cell(r, 26).value or ("Free" if total <= 0 else "Cash"))
+                doctor_name = str(ws.cell(r, 27).value or "").strip()
+
+                doctor = None
+                if doctor_name:
+                    doctor = Doctor.query.filter(
+                        db.func.lower(Doctor.name) == doctor_name.lower(),
+                        Doctor.branch_id == b.id
+                    ).first()
+                    if not doctor:
+                        doctor = Doctor(name=doctor_name, branch_id=b.id)
+                        db.session.add(doctor)
+                        db.session.flush()
+
+                p = Patient(
+                    patient_code=import_code,
+                    branch_id=b.id,
+                    name=str(patient_name).strip(),
+                    mobile=str(ws.cell(r, 7).value or ""),
+                    age=str(ws.cell(r, 5).value or ""),
+                    gender=str(ws.cell(r, 6).value or ""),
+                    address=str(ws.cell(r, 29).value or ""),
+                    medical_history="Imported from Excel",
+                    created_by=current_user().id,
+                    created_at=datetime.combine(excel_date(ws.cell(r, 2).value), datetime.min.time())
+                )
+                db.session.add(p)
+                db.session.flush()
+
+                treatment_notes = []
+                first_treatment = None
+                for col, tname in EXCEL_TREATMENT_COLUMNS.items():
+                    val = ws.cell(r, col).value
+                    if val not in (None, ""):
+                        t = get_or_create_treatment(tname)
+                        if first_treatment is None:
+                            first_treatment = t
+                        treatment_notes.append(f"{tname}: {val}")
+
+                visit = Visit(
+                    patient_id=p.id,
+                    branch_id=b.id,
+                    doctor_id=doctor.id if doctor else None,
+                    treatment_id=first_treatment.id if first_treatment else None,
+                    tooth_notes=" | ".join(treatment_notes),
+                    clinical_notes="Imported from Excel Patient Database",
+                    visit_date=excel_date(ws.cell(r, 2).value),
+                    created_by=current_user().id
+                )
+                db.session.add(visit)
+                db.session.flush()
+
+                inv = Invoice(
+                    patient_id=p.id,
+                    visit_id=visit.id,
+                    branch_id=b.id,
+                    total=total,
+                    discount=0,
+                    received=received,
+                    balance=max(due, 0),
+                    payment_type="Free" if total <= 0 else payment,
+                    created_by=current_user().id,
+                    created_at=datetime.combine(excel_date(ws.cell(r, 2).value), datetime.min.time())
+                )
+                db.session.add(inv)
+                db.session.flush()
+                inv.invoice_no = f"MS-XLS-INV-{p.id:05d}"
+                added_patients += 1
+
+            if "Daily Expenses" in wb.sheetnames:
+                ws = wb["Daily Expenses"]
+                for r in range(8, ws.max_row + 1):
+                    exp_date = ws.cell(r, 2).value
+                    branch_name = ws.cell(r, 3).value
+                    amount = ws.cell(r, 7).value
+                    if not exp_date or not branch_name or amount in (None, ""):
+                        continue
+
+                    b = get_or_create_branch(str(branch_name))
+                    # Simple duplicate guard by exact main fields.
+                    d = excel_date(exp_date)
+                    category = str(ws.cell(r, 4).value or "")
+                    description = str(ws.cell(r, 5).value or "")
+                    amount_f = float(amount or 0)
+                    exists = Expense.query.filter_by(
+                        branch_id=b.id, expense_date=d, category=category,
+                        description=description, amount=amount_f
+                    ).first()
+                    if not exists:
+                        db.session.add(Expense(
+                            branch_id=b.id,
+                            expense_date=d,
+                            category=category,
+                            description=description,
+                            amount=amount_f,
+                            created_by=current_user().id
+                        ))
+                        added_expenses += 1
+
+            db.session.commit()
+            log_action("IMPORT_EXCEL",
+                       f"Patients added: {added_patients}; skipped: {skipped_patients}; expenses added: {added_expenses}",
+                       None)
+            flash(f"Import complete: {added_patients} patients added, {skipped_patients} skipped, {added_expenses} expenses added.", "success")
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Excel import failed: {e}", "danger")
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return redirect(url_for("import_excel"))
+
+    return render_template("import_excel.html")
+
 
 @app.route("/branches",methods=["GET","POST"])
 @super_required
