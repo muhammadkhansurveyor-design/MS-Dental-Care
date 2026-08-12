@@ -17,6 +17,7 @@ if db_url.startswith("postgres://"):
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["UPLOAD_FOLDER"] = os.path.join(os.path.dirname(__file__), "static", "uploads")
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 db = SQLAlchemy(app)
 
