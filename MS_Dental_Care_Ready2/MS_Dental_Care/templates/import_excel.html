@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block content %}
+<h2>Import Excel Data</h2><p class="text-muted">Upload your MS Dental Care Excel workbook. Existing imported Patient IDs are skipped, so the same file can be checked again without duplicating those rows.</p>
+<div class="card p-4"><form method="post" enctype="multipart/form-data"><label class="form-label">Excel file (.xlsx / .xlsm)</label><input type="file" name="excel_file" accept=".xlsx,.xlsm" class="form-control" required><button class="btn btn-success mt-3">Import Patients & Expenses</button></form>
+<hr><small>Expected sheets: <b>Patient Database</b> and optionally <b>Daily Expenses</b>. Free patients are detected automatically when Total Fee is blank/0.</small></div>{% endblock %}

@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block content %}
+<h2>Free Patients Report</h2><p class="text-muted">Free = invoice total after discount is zero, or payment type is Free.</p>
+<form class="card p-3 mb-3"><div class="row g-2">
+<div class="col-md-3"><select name="branch_id" class="form-select"><option value="">All permitted branches</option>{% for b in branches %}<option value="{{b.id}}" {% if selected_branch==b.id %}selected{% endif %}>{{b.name}}</option>{% endfor %}</select></div>
+<div class="col-md-5"><input name="q" value="{{q}}" class="form-control" placeholder="Patient name / mobile / Patient ID"></div><div class="col-auto"><button class="btn btn-primary">Filter</button></div></div></form>
+<div class="card p-3"><div class="mb-2"><b>Total Free Patients:</b> {{rows|length}}</div><div class="table-responsive"><table class="table table-hover"><tr><th>Date</th><th>Patient ID</th><th>Patient</th><th>Branch</th><th>Treatment</th><th>Doctor</th></tr>
+{% for i in rows %}<tr><td>{{i.created_at.date()}}</td><td><a href="{{url_for('patient_detail',pid=i.patient_id)}}">{{i.patient.patient_code}}</a></td><td>{{i.patient.name}}</td><td>{{i.branch.name}}</td><td>{{i.visit.treatment.name if i.visit and i.visit.treatment else '-'}}</td><td>{{i.visit.doctor.name if i.visit and i.visit.doctor else '-'}}</td></tr>{% endfor %}
+</table></div></div>{% endblock %}

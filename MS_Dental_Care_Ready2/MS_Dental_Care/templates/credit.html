@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block content %}<h2>Credit Patients</h2>
+<form class="card p-3 mb-3"><div class="row g-2 align-items-end">
+<div class="col-md-4"><label class="form-label">Branch</label><select name="branch_id" class="form-select" onchange="this.form.submit()"><option value="">All permitted branches</option>{% for b in branches %}<option value="{{b.id}}" {% if selected_branch==b.id %}selected{% endif %}>{{b.name}}</option>{% endfor %}</select></div>
+<div class="col-auto"><button class="btn btn-primary">Apply</button></div>
+{% if selected_branch %}<div class="col-auto"><a class="btn btn-outline-danger" href="{{url_for('credit_pdf',branch_id=selected_branch)}}">Download Branch PDF</a></div>{% endif %}
+</div></form>
+<div class="card p-3"><div class="table-responsive"><table class="table"><tr><th>Invoice</th><th>Patient</th><th>Branch</th><th>Total</th><th>Received</th><th>Balance</th></tr>{% for i in rows %}<tr><td>{{i.invoice_no}}</td><td><a href="{{url_for('patient_detail',pid=i.patient_id)}}">{{i.patient.name}}</a></td><td>{{i.branch.name}}</td><td>{{i.total-i.discount}}</td><td>{{i.received}}</td><td class="text-danger fw-bold">{{i.balance}}</td></tr>{% endfor %}</table></div>
+{% if not selected_branch %}<p class="text-muted mb-0">Select a branch above to enable that branch's PDF export.</p>{% endif %}
+</div>{% endblock %}
