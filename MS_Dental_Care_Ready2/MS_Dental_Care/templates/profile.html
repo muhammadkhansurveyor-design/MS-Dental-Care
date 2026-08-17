@@ -1,8 +1,0 @@
-{% extends "base.html" %}{% block content %}
-<h2>My Profile</h2><form method="post" class="card p-4"><div class="row g-3">
-<div class="col-md-6"><label>Name</label><input name="name" value="{{u.name}}" class="form-control" required></div>
-<div class="col-md-6"><label>Email</label><input name="email" type="email" value="{{u.email}}" class="form-control" required></div>
-<div class="col-md-6"><label>New Password</label><input name="password" type="password" class="form-control" placeholder="Leave blank to keep existing"></div>
-<div class="col-md-3"><label>Role</label><input value="{{u.role}}" class="form-control" disabled></div>
-<div class="col-md-3"><label>Branch</label><input value="{{u.branch.name if u.branch else 'All Branches'}}" class="form-control" disabled></div>
-</div><button class="btn btn-primary mt-4">Update My Profile</button></form>{% endblock %}
