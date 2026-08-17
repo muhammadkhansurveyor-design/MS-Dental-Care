@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block content %}
+<h2>Branch Wise Reports</h2><form class="card p-3 mb-3"><div class="row g-2">
+<div class="col-md-3"><select name="branch_id" class="form-select"><option value="">All permitted branches</option>{% for b in branches %}<option value="{{b.id}}" {% if selected_branch==b.id %}selected{% endif %}>{{b.name}}</option>{% endfor %}</select></div>
+<div class="col-md-3"><input name="start" type="date" value="{{start}}" class="form-control"></div><div class="col-md-3"><input name="end" type="date" value="{{end}}" class="form-control"></div><div class="col-auto"><button class="btn btn-primary">Apply</button></div></div></form>
+<div class="card p-3 mb-3"><div class="table-responsive"><table class="table table-striped"><tr><th>Branch</th><th>Patients</th><th>Billing</th><th>Received</th><th>Due</th><th>Expenses</th><th>Net</th><th>Free</th><th>PDF</th></tr>
+{% for r in rows %}<tr><td>{{r.name}}</td><td>{{r.patients}}</td><td>{{'{:,.0f}'.format(r.billing)}}</td><td>{{'{:,.0f}'.format(r.received)}}</td><td>{{'{:,.0f}'.format(r.due)}}</td><td>{{'{:,.0f}'.format(r.expenses)}}</td><td>{{'{:,.0f}'.format(r.net)}}</td><td>{{r.free}}</td><td><a class="btn btn-sm btn-outline-danger" href="{{url_for('branch_report_pdf',branch_id=r.id,start=start,end=end)}}">Download PDF</a></td></tr>{% endfor %}
+</table></div></div>
+<div class="card p-3"><canvas id="branchChart"></canvas></div>
+<script>new Chart(document.getElementById('branchChart'),{type:'bar',data:{labels:{{rows|map(attribute='name')|list|tojson}},datasets:[
+{label:'Received',data:{{rows|map(attribute='received')|list|tojson}}},
+{label:'Due',data:{{rows|map(attribute='due')|list|tojson}}},
+{label:'Expenses',data:{{rows|map(attribute='expenses')|list|tojson}}},
+{label:'Net',data:{{rows|map(attribute='net')|list|tojson}}}
+]}});</script>{% endblock %}
